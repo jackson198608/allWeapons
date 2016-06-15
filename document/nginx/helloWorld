@@ -1,0 +1,270 @@
+1 学习 Nginx 模块开发需要有哪些准备？
+
+	需要的预备知识不多，有如下几点：
+
+    		有过一些 C 语言的编程经历；
+   		 知道 Nginx 是干嘛的，并有过编写或改写 Nginx 的配置文件的经历。
+
+	OK，就这两点就够了 :)
+
+	好了，那就开始吧~
+2 我们的 HelloWorld 的目标是什么？
+
+	我们的目标，就是你在浏览器里输入http://localhost/hello_world时，显示：
+
+		hello world
+
+	当然，为了能够更加自定义一些，我们尝试在hello world后面再显示一个字符串，比如：
+
+		hello world, Poechant
+
+	那么我们的配置文件看起来是什么样的呢？
+
+		http {
+		    include mime.types;
+		    default_type application/octet-stream;
+		    server {
+		        listen 80;
+		        server_name localhost;
+		        location / {
+		            root html;
+		            index index.php index.html index.htm;
+		        }
+		        location /hello_world {
+		            hello_world Poechant;
+		        }
+		    }
+		}
+
+	是的，很简单吧，唯一特别的部分，就是：
+
+		location /hello_world {
+		    hello_world Poechant;
+		}
+
+3 开工
+	3.1 目录结构
+
+		首先要明确，我们的文件和目录结构：
+		
+		ngx_http_hello_world_module
+		|_____________ngx_http_hello_world_module.c
+		|_____________config
+		
+		其中ngx_http_hello_world_module.c是模块的 C 源码文件，config是模块的配置文件。
+	3.2 ngx_http_hello_world_module.c
+
+		定义一个结构体：
+		
+			typedef struct {
+			    ngx_str_t output_words;
+			} ngx_http_hello_world_loc_conf_t;
+		
+		定义三个变量：
+		
+			// Structure for the HelloWorld command
+			static ngx_command_t ngx_http_hello_world_commands[] = {
+			    {
+			        ngx_string("hello_world"), // The command name
+			        NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1,
+			        ngx_http_hello_world, // The command handler
+			        NGX_HTTP_LOC_CONF_OFFSET,
+			        offsetof(ngx_http_hello_world_loc_conf_t, output_words),
+			        NULL
+			    },
+			    ngx_null_command
+			};
+			
+			// Structure for the HelloWorld context
+			static ngx_http_module_t ngx_http_hello_world_module_ctx = {
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    ngx_http_hello_world_create_loc_conf,
+			    ngx_http_hello_world_merge_loc_conf
+			};
+			
+			// Structure for the HelloWorld module, the most important thing
+			ngx_module_t ngx_http_hello_world_module = {
+			    NGX_MODULE_V1,
+			    &ngx_http_hello_world_module_ctx,
+			    ngx_http_hello_world_commands,
+			    NGX_HTTP_MODULE,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NGX_MODULE_V1_PADDING
+			};
+		
+		定义三个函数：
+		
+			static char* ngx_http_hello_world(ngx_conf_t* cf, ngx_command_t* cmd, void* conf);
+			static void* ngx_http_hello_world_create_loc_conf(ngx_conf_t* cf)
+			static char* ngx_http_hello_world_merge_loc_conf(ngx_conf_t* cf, void* parent, void* child)
+		
+		完整的程序如下：
+		
+			#include <ngx_config.h>
+			#include <ngx_core.h>
+			#include <ngx_http.h>
+			
+			typedef struct {
+			    ngx_str_t output_words;
+			} ngx_http_hello_world_loc_conf_t;
+			
+			// To process HelloWorld command arguments
+			static char* ngx_http_hello_world(ngx_conf_t* cf, ngx_command_t* cmd, void* conf);
+			
+			// Allocate memory for HelloWorld command
+			static void* ngx_http_hello_world_create_loc_conf(ngx_conf_t* cf);
+			
+			// Copy HelloWorld argument to another place
+			static char* ngx_http_hello_world_merge_loc_conf(ngx_conf_t* cf, void* parent, void* child);
+			
+			// Structure for the HelloWorld command
+			static ngx_command_t ngx_http_hello_world_commands[] = {
+			    {
+			        ngx_string("hello_world"), // The command name
+			        NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1,
+			        ngx_http_hello_world, // The command handler
+			        NGX_HTTP_LOC_CONF_OFFSET,
+			        offsetof(ngx_http_hello_world_loc_conf_t, output_words),
+			        NULL
+			    },
+			    ngx_null_command
+			};
+			
+			// Structure for the HelloWorld context
+			static ngx_http_module_t ngx_http_hello_world_module_ctx = {
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    ngx_http_hello_world_create_loc_conf,
+			    ngx_http_hello_world_merge_loc_conf
+			};
+			
+			// Structure for the HelloWorld module, the most important thing
+			ngx_module_t ngx_http_hello_world_module = {
+			    NGX_MODULE_V1,
+			    &ngx_http_hello_world_module_ctx,
+			    ngx_http_hello_world_commands,
+			    NGX_HTTP_MODULE,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NULL,
+			    NGX_MODULE_V1_PADDING
+			};
+			
+			static ngx_int_t ngx_http_hello_world_handler(ngx_http_request_t* r) {
+			    ngx_int_t rc;
+			    ngx_buf_t* b;
+			    ngx_chain_t out[2];
+			
+			    ngx_http_hello_world_loc_conf_t* hlcf;
+			    hlcf = ngx_http_get_module_loc_conf(r, ngx_http_hello_world_module);
+			
+			    r->headers_out.content_type.len = sizeof("text/plain") - 1;
+			    r->headers_out.content_type.data = (u_char*)"text/plain";
+			
+			    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+			
+			    out[0].buf = b;
+			    out[0].next = &out[1];
+			
+			    b->pos = (u_char*)"hello_world, ";
+			    b->last = b->pos + sizeof("hello_world, ") - 1;
+			    b->memory = 1;
+			
+			    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+			
+			    out[1].buf = b;
+			    out[1].next = NULL;
+			
+			    b->pos = hlcf->output_words.data;
+			    b->last = hlcf->output_words.data + (hlcf->output_words.len);
+			    b->memory = 1;
+			    b->last_buf = 1;
+			
+			    r->headers_out.status = NGX_HTTP_OK;
+			    r->headers_out.content_length_n = hlcf->output_words.len + sizeof("hello_world, ") - 1;
+			    rc = ngx_http_send_header(r);
+			    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+			        return rc;
+			    }
+			
+			    return ngx_http_output_filter(r, &out[0]);
+			}
+			
+			static void* ngx_http_hello_world_create_loc_conf(ngx_conf_t* cf) {
+			    ngx_http_hello_world_loc_conf_t* conf;
+			
+			    conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_hello_world_loc_conf_t));
+			    if (conf == NULL) {
+			        return NGX_CONF_ERROR;
+			    }
+			    conf->output_words.len = 0;
+			    conf->output_words.data = NULL;
+			
+			    return conf;
+			}
+			
+			static char* ngx_http_hello_world_merge_loc_conf(ngx_conf_t* cf, void* parent, void* child) {
+			    ngx_http_hello_world_loc_conf_t* prev = parent;
+			    ngx_http_hello_world_loc_conf_t* conf = child;
+			    ngx_conf_merge_str_value(conf->output_words, prev->output_words, "Nginx");
+			    return NGX_CONF_OK;
+			}
+			
+			static char* ngx_http_hello_world(ngx_conf_t* cf, ngx_command_t* cmd, void* conf) {
+			    ngx_http_core_loc_conf_t* clcf;
+			    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+			    clcf->handler = ngx_http_hello_world_handler;
+			    ngx_conf_set_str_slot(cf, cmd, conf);
+			    return NGX_CONF_OK;
+			}
+
+3.3 config
+
+	ngx_addon_name=ngx_http_hello_world_module
+	HTTP_MODULES="$HTTP_MODULES ngx_http_hello_world_module"
+	NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_hello_world_module.c"
+
+3.4 编写配置文件
+
+	最开始已经展示过了，就是它。
+3.5 编译你的模块
+
+	$ ./configure --add-module=/your/module/path/ngx_http_hello_world_module
+	make
+
+	如果没有任何错误提示的话，那么恭喜你，你的模块编译通过了！
+
+	然后运行 Nginx。如果没有任何错误提示的话，再次恭喜你，你的模块已经被正常加载运行了！
+3.6 测试你的模块
+
+	http://localhost/hello_world
+
+	你应该会看到：
+
+		hello_world, Poechant
+
+	这个简单模块的详细解释，在该系列博文的第二、三、四篇中。
+4 恐怕我还是要说一些“非代码”
+
+	一般来说，刚入门做某件事情的时候，我们不大想听废话，希望赶紧开始上手干活，否则会觉得很空洞。这也是为什么我一开始就上了一个例子，并给出代码。但是还是要了解一些“空话”，才有助于理解。
+	
+	Nginx 处理请求的过程，是在请求收到后定位到配置文件中描述的相应 location，然后由 handler 生成 response，再由 filter 进行处理。所以模块开发，可以是 handler 模块开发，也可以是 filter 模块开发（当然还有其他类型的模块）。
